@@ -1,54 +1,109 @@
-import json
-import random 
-
 from fastmcp import FastMCP
+import os 
+import sqlite3
 
+DB_PATH = os.path.join(os.path.dirname(__file__), "expenses.db")
+print(DB_PATH)
 
-# Create the FastMCP server instance
-mcp = FastMCP("Simple Calculator Server")
+mcp = FastMCP(name="ExpenseTracker")
 
-# Tool: Add two numbers
+def init_db():
+  with sqlite3.connect(DB_PATH) as conn:
+    conn.execute("""
+      CREATE TABLE IF NOT EXISTS expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        amount REAL NOT NULL,
+        category TEXT NOT NULL,
+        subcategory TEXT DEFAULT '',
+        note TEXT DEFAULT ''
+      )
+    """)
+
+init_db()
+
 @mcp.tool()
-def add(a: int, b: int) -> int:
-    """
-    Tool: Add two numbers
-    Parameters:
-        a (int): The first number
-        b (int): The second number
-    Returns:
-        int: The sum of the two numbers
-    """
-    return a + b
+def add_expense(date, amount, category, subcategory="", note=""):
+  """
+  Add a new expense to the database.
 
-# Tool: Generate a random number
+  Args:
+      date (str): date of expense in format "YYYY-MM-DD"
+      amount (float): amount of expense
+      category (str): category of expense
+      subcategory (str, optional): subcategory of expense, defaults to ""
+      note (str, optional): note about expense, defaults to ""
+
+  Returns:
+      dict: with keys "status" and "id"
+  """
+  with sqlite3.connect(DB_PATH) as conn:
+    cur = conn.execute("""
+      INSERT INTO expenses (date, amount, category, subcategory, note)
+      VALUES (?, ?, ?, ?, ?)
+    """, (date, amount, category, subcategory, note))
+    return {"status": "ok", "id": cur.lastrowid}
+  
 @mcp.tool()
-def random_number(min_val: int=1, max_val: int=100) -> int:
-    """
-    Tool: Generate a random number
-    Parameters:
-        min_val (int): The minimum value of the random number
-        max_val (int): The maximum value of the random number
-    Returns:
-        int: A random number between min_val and max_val
-    """
-    return random.randint(min_val, max_val)
+def list_expenses(start_date=None, end_date=None):
+  """
+  List all expenses in the database.
 
-# Resource: Server Information
-@mcp.resource("info://server")
-def server_info() -> str:
-    """
-    Resource: Server Information
+  Args:
+      start_date (str, optional): start date of expenses in format "YYYY-MM-DD", defaults to None
+      end_date (str, optional): end date of expenses in format "YYYY-MM-DD", defaults to None
+
+  Returns:
+      list of dicts: each dict represents an expense with keys "id", "date", "amount", "category", "subcategory", "note"
+  """
+  with sqlite3.connect(DB_PATH) as conn:
+    cur = conn.execute("""
+        SELECT id as ID, 
+        date as Date, 
+        '₹' || amount as Amount, 
+        category as Category, 
+        subcategory as Subcategory, 
+        note as Note 
+        FROM expenses 
+        WHERE date BETWEEN ? AND ?
+        ORDER BY date DESC
+        """, (start_date, end_date))
+    cols = [col[0] for col in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+  
+@mcp.tool()
+def summarize(start_date=None, end_date=None, category=None):
+  """
+  Summarize expenses by category.
+
+  Args:
+      start_date (str, optional): start date of expenses in format "YYYY-MM-DD", defaults to None
+      end_date (str, optional): end date of expenses in format "YYYY-MM-DD", defaults to None
+      category (str, optional): category of expenses, defaults to None
+
+  Returns:
+      dict: with keys "category" and "amount"
+  """
+  with sqlite3.connect(DB_PATH) as conn:
+    cur = conn.execute("""
+        SELECT category as Category, SUM(amount) as Amount 
+        FROM expenses 
+        WHERE date BETWEEN ? AND ? AND category = ?
+        GROUP BY category
+        """, (start_date, end_date, category))
+    cols = [col[0] for col in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+  
+@mcp.resource("expense://categories", mime_type="application/json")
+def get_categories():
+  """
+    Return a JSON string containing a list of categories.
+
     Returns:
-        str: A JSON string containing information about the server
-    """
-    info = {
-        "name": "Simple Calculator Server",
-        "description": "A simple calculator server",
-        "version": "1.0",
-        "tools": ["add", "random_number"],
-        "author": "John Doe"
-    }
-    return json.dumps(info, indent=2)
+        str: a JSON string containing a list of categories
+  """
+  with open("categories.json", "r") as f:
+    return f.read()
 
 # Start ther server
 if __name__ == "__main__":
